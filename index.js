@@ -1,109 +1,102 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const path = require("path");
+// server.js
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+const PORT = process.env.PORT || 3000;
 
-app.use(express.static("public")); // static files
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-// ✅ 채널별 라우팅 처리
+const rooms = {}; // 방 정보 저장: { roomName: { password, admin, muted, notice } }
+const users = {}; // socket.id → { nickname, room }
+
+app.use(express.static(join(__dirname, "public")));
+
 app.get("/:room", (req, res) => {
-  const room = req.params.room;
-  if (room === "socket.io") return; // socket.io 예외
-  res.sendFile(path.join(__dirname, "public", "channel.html"));
+  res.sendFile(join(__dirname, "public/index.html"));
 });
-
-// 🏠 메인 페이지
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-const rooms = {};
-const channels = new Set();
-const roomOwners = {};
-const roomPasswords = {};
 
 io.on("connection", (socket) => {
-  socket.on("createChannel", (name) => {
-    channels.add(name);
-    io.emit("channelList", Array.from(channels));
-  });
-
-  socket.on("getChannels", () => {
-    socket.emit("channelList", Array.from(channels));
-  });
-
-  socket.on("join", ({ room, nickname, password }) => {
-    socket.join(room);
-    socket.room = room;
-    socket.nickname = nickname;
-
-    if (!rooms[room]) rooms[room] = [];
-    if (!rooms[room].some((u) => u.id === socket.id)) {
-      rooms[room].push({ id: socket.id, nickname });
-    }
-
-    if (!channels.has(room)) channels.add(room);
-
-    // ✅ 관리자 설정 여부 검사
-    if (!roomPasswords[room]) {
-      // 최초 입장자
-      roomPasswords[room] = password;
-      roomOwners[room] = socket.id;
-      socket.emit("adminGranted");
-    } else if (password && roomPasswords[room] !== password) {
-      socket.emit("adminDenied");
-    }
-
-    io.emit("channelList", Array.from(channels));
-    io.to(room).emit("userList", rooms[room]);
-  });
-
-  socket.on("loginAdmin", ({ room, password }) => {
-    if (roomPasswords[room] === password) {
-      roomOwners[room] = socket.id;
-      socket.emit("adminGranted");
+  socket.on("join", ({ room, nickname, isFirst, password }) => {
+    if (!rooms[room]) {
+      if (isFirst) {
+        rooms[room] = { password, admin: socket.id, muted: [], notice: "" };
+        socket.isAdmin = true;
+        socket.emit("system", "✅ 방 생성 완료 (관리자 권한)");
+      } else {
+        socket.emit("system", "❌ 방이 존재하지 않습니다.");
+        return;
+      }
     } else {
-      socket.emit("adminDenied");
+      if (isFirst) {
+        socket.emit("system", "❌ 이미 존재하는 방입니다.");
+        return;
+      }
+      socket.isAdmin = false;
+    }
+
+    socket.join(room);
+    socket.nickname = nickname;
+    socket.room = room;
+    users[socket.id] = { nickname, room };
+
+    io.to(room).emit("notice", rooms[room].notice);
+    updateUserList(room);
+  });
+
+  socket.on("chat", (msg) => {
+    const { room, nickname } = users[socket.id] || {};
+    if (!room || rooms[room].muted.includes(socket.id)) return;
+    io.to(room).emit("chat", { from: nickname, msg });
+  });
+
+  socket.on("notice", (notice) => {
+    const { room } = users[socket.id] || {};
+    if (room && rooms[room].admin === socket.id) {
+      rooms[room].notice = notice;
+      io.to(room).emit("notice", notice);
     }
   });
 
-  socket.on("message", (msg) => {
-    io.to(socket.room).emit("message", {
-      nickname: socket.nickname,
-      text: msg,
-    });
-  });
-
-  socket.on("privateMessage", ({ to, from, message }) => {
-    const target = [...io.sockets.sockets.values()].find(
-      (s) => s.nickname === to,
-    );
-    if (target) {
-      target.emit("privateMessage", { from, message });
+  socket.on("mute", (targetId) => {
+    const { room } = users[socket.id] || {};
+    if (room && rooms[room].admin === socket.id) {
+      rooms[room].muted.push(targetId);
+      io.to(targetId).emit("system", "⛔ 채팅 금지되었습니다.");
     }
   });
 
-  socket.on("muteUser", ({ to }) => {
-    if (roomOwners[socket.room] === socket.id) {
-      const target = [...io.sockets.sockets.values()].find(
-        (s) => s.nickname === to,
-      );
-      if (target) target.emit("muted");
+  socket.on("whisper", ({ to, msg }) => {
+    for (let id in users) {
+      if (users[id].nickname === to) {
+        io.to(id).emit("whisper", { from: socket.nickname, msg });
+        break;
+      }
     }
   });
 
   socket.on("disconnect", () => {
-    const room = socket.room;
-    if (rooms[room]) {
-      rooms[room] = rooms[room].filter((u) => u.id !== socket.id);
-      io.to(room).emit("userList", rooms[room]);
+    const { room } = users[socket.id] || {};
+    if (room) {
+      delete users[socket.id];
+      updateUserList(room);
     }
   });
+
+  function updateUserList(room) {
+    const list = Object.entries(users)
+      .filter(([_, u]) => u.room === room)
+      .map(([id, u]) => ({ id, nickname: u.nickname }));
+    io.to(room).emit("users", list);
+  }
 });
-const PORT = process.env.PORT || 3000; // ✅ Render 포트 사용
+
 server.listen(PORT, () => {
-  console.log("✅ 서버 실행 중 on " + PORT);
+  console.log("✅ Server running on port " + PORT);
 });

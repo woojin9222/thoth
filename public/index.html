@@ -2,40 +2,115 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Thoth - 메인</title>
-    <link rel="stylesheet" href="/style.css" />
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <title>uchat clone</title>
+    <style>
+      body {
+        margin: 0;
+        display: flex;
+        height: 100vh;
+        font-family: sans-serif;
+      }
+      #chat {
+        flex: 3;
+        display: flex;
+        flex-direction: column;
+        padding: 10px;
+        border-right: 1px solid #ccc;
+      }
+      #users {
+        flex: 1;
+        padding: 10px;
+        background: #f4f4f4;
+        overflow-y: auto;
+      }
+      #messages {
+        flex: 1;
+        overflow-y: scroll;
+        margin: 10px 0;
+        background: #eee;
+        padding: 10px;
+      }
+    </style>
   </head>
   <body>
-    <div style="padding: 20px; max-width: 600px; margin: auto">
-      <h1>📺 Thoth 채널 목록</h1>
-      <div style="margin-bottom: 20px">
-        <input id="newChannel" placeholder="채널 이름" />
-        <button id="createBtn">채널 생성</button>
-      </div>
-      <ul id="channelList"></ul>
+    <div id="chat">
+      <div id="noticeArea"></div>
+      <div id="messages"></div>
+      <input id="input" placeholder="메시지를 입력하세요..." />
     </div>
+    <ul id="users"></ul>
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script>
       const socket = io();
+      const room = decodeURIComponent(
+        location.pathname.replace("/", "") || "default",
+      );
+      const nickname = prompt("닉네임 입력") || "익명";
+      const isFirst = confirm("이 방을 새로 만드시겠습니까?");
+      const password = isFirst ? prompt("비밀번호 설정") : "";
 
-      function updateChannelList(channels) {
-        const $list = $("#channelList").empty();
-        channels.forEach((ch) => {
-          $list.append(`<li><a href="/channel.html?room=${ch}">${ch}</a></li>`);
-        });
-      }
+      socket.emit("join", { room, nickname, isFirst, password });
 
-      socket.emit("getChannels");
-      socket.on("channelList", updateChannelList);
+      const messages = document.getElementById("messages");
+      const input = document.getElementById("input");
+      const noticeArea = document.getElementById("noticeArea");
 
-      $("#createBtn").on("click", () => {
-        const name = $("#newChannel").val().trim();
-        if (name) socket.emit("createChannel", name);
+      socket.on("chat", ({ from, msg }) => {
+        const div = document.createElement("div");
+        div.innerText = from + ": " + msg;
+        messages.appendChild(div);
       });
 
-      $("#newChannel").on("keypress", (e) => {
-        if (e.key === "Enter") $("#createBtn").click();
+      socket.on("whisper", ({ from, msg }) => {
+        const div = document.createElement("div");
+        div.innerText = "(귓속말) " + from + ": " + msg;
+        div.style.color = "gray";
+        messages.appendChild(div);
+      });
+
+      socket.on("notice", (html) => {
+        noticeArea.innerHTML = html;
+      });
+
+      socket.on("system", (msg) => {
+        const div = document.createElement("div");
+        div.innerText = "[알림] " + msg;
+        div.style.color = "red";
+        messages.appendChild(div);
+      });
+
+      socket.on("users", (list) => {
+        const userBox = document.getElementById("users");
+        userBox.innerHTML = "";
+        list.forEach((u) => {
+          const li = document.createElement("li");
+          li.innerText = u.nickname;
+          li.onclick = () => {
+            const choice = prompt("1: 멘션, 2: 귓속말, 3: 금지");
+            if (choice === "1") input.value += "@" + u.nickname + " ";
+            if (choice === "2") {
+              const msg = prompt("귓속말:");
+              socket.emit("whisper", { to: u.nickname, msg });
+            }
+            if (choice === "3") {
+              socket.emit("mute", u.id);
+            }
+          };
+          userBox.appendChild(li);
+        });
+      });
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          const text = input.value.trim();
+          if (text.startsWith("/공지")) {
+            socket.emit("notice", text.slice(4).trim());
+          } else {
+            socket.emit("chat", text);
+          }
+          input.value = "";
+        }
       });
     </script>
   </body>
