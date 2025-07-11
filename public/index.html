@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Thoth - 메인</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  </head>
+  <body>
+    <div style="padding: 20px; max-width: 600px; margin: auto">
+      <h1>📺 Thoth 채널 목록</h1>
+      <div style="margin-bottom: 20px">
+        <input id="newChannel" placeholder="채널 이름" />
+        <button id="createBtn">채널 생성</button>
+      </div>
+      <ul id="channelList"></ul>
+    </div>
+    <script>
+      const socket = io();
+
+      function updateChannelList(channels) {
+        const $list = $("#channelList").empty();
+        channels.forEach((ch) => {
+          $list.append(`<li><a href="/channel.html?room=${ch}">${ch}</a></li>`);
+        });
+      }
+
+      socket.emit("getChannels");
+      socket.on("channelList", updateChannelList);
+
+      $("#createBtn").on("click", () => {
+        const name = $("#newChannel").val().trim();
+        if (name) socket.emit("createChannel", name);
+      });
+
+      $("#newChannel").on("keypress", (e) => {
+        if (e.key === "Enter") $("#createBtn").click();
+      });
+    </script>
+  </body>
+</html>

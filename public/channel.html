@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>UChat Channel</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/socket.io/socket.io.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div id="chat">
+        <div id="notice">📢 공지: 환영합니다!</div>
+        <div id="messages"></div>
+        <div style="display: flex; margin-top: 10px">
+          <input id="input" placeholder="메시지를 입력하세요..." />
+          <button onclick="send()">전송</button>
+        </div>
+      </div>
+      <div id="users">
+        <h3>🧑 유저 목록</h3>
+        <ul id="userList"></ul>
+      </div>
+      <div
+        id="userMenu"
+        style="
+          display: none;
+          position: absolute;
+          background: white;
+          border: 1px solid #ccc;
+          padding: 5px;
+          font-size: 14px;
+          z-index: 1000;
+        "
+      ></div>
+    </div>
+    <script>
+      const socket = io();
+      const url = new URL(window.location.href);
+      let isAdmin = false;
+      let muted = false;
+
+      const room = window.location.pathname.replace("/", "") || "default";
+      const nickname = prompt("닉네임 입력") || "익명";
+      let password = "";
+
+      const isFirst = confirm("💡 이 방을 처음 생성하시나요?");
+      if (isFirst) {
+        password = prompt("🔐 관리자 비밀번호를 설정하세요");
+      }
+
+      socket.emit("join", { room, nickname, password });
+
+      socket.on("adminGranted", () => {
+        isAdmin = true;
+        alert("🎉 관리자 권한이 부여되었습니다.");
+      });
+
+      socket.on("adminDenied", () => {
+        alert("❌ 비밀번호가 틀렸습니다.");
+      });
+
+      socket.on("message", ({ nickname, text }) => {
+        const el = document.createElement("div");
+        el.innerText = `${nickname}: ${text}`;
+        document.getElementById("messages").appendChild(el);
+      });
+
+      socket.on("userList", (users) => {
+        const ul = document.getElementById("userList");
+        ul.innerHTML = "";
+        users.forEach((user) => {
+          const li = document.createElement("li");
+          li.innerText = user.nickname;
+          li.onclick = (e) => showUserMenu(e, user.nickname);
+          ul.appendChild(li);
+        });
+      });
+
+      socket.on("muted", () => {
+        muted = true;
+        alert("🔇 당신은 채팅금지되었습니다.");
+      });
+
+      socket.on("privateMessage", ({ from, message }) => {
+        alert(`💌 ${from}님의 귓속말: ${message}`);
+      });
+
+      function showUserMenu(event, targetNickname) {
+        const menu = document.getElementById("userMenu");
+        menu.style.display = "block";
+        menu.style.left = `${event.pageX}px`;
+        menu.style.top = `${event.pageY}px`;
+
+        menu.innerHTML = isAdmin
+          ? `
+        <div onclick="mention('${targetNickname}')">멘션</div>
+        <div onclick="mute('${targetNickname}')">채팅금지</div>
+        <div onclick="kick('${targetNickname}')">강퇴</div>
+      `
+          : `
+        <div onclick="mention('${targetNickname}')">멘션</div>
+        <div onclick="whisper('${targetNickname}')">귓속말</div>
+      `;
+      }
+
+      function mention(name) {
+        document.getElementById("input").value = `@${name} `;
+        document.getElementById("userMenu").style.display = "none";
+      }
+
+      function whisper(name) {
+        const msg = prompt(`${name}에게 보낼 메시지:`);
+        if (msg)
+          socket.emit("privateMessage", {
+            to: name,
+            from: nickname,
+            message: msg,
+          });
+        document.getElementById("userMenu").style.display = "none";
+      }
+
+      function mute(name) {
+        socket.emit("muteUser", { to: name });
+        document.getElementById("userMenu").style.display = "none";
+      }
+
+      function kick(name) {
+        alert(`(예시) ${name}을 강퇴했습니다.`);
+        document.getElementById("userMenu").style.display = "none";
+      }
+
+      function send() {
+        const input = document.getElementById("input");
+        const msg = input.value.trim();
+        if (!msg) return;
+
+        if (msg === "/로그인") {
+          const pw = prompt("🔐 관리자 비밀번호를 입력하세요");
+          if (pw) socket.emit("loginAdmin", { room, password: pw });
+          input.value = "";
+          return;
+        }
+
+        if (!muted) {
+          socket.emit("message", msg);
+          input.value = "";
+        } else {
+          alert("⛔ 채팅이 금지되어 전송할 수 없습니다.");
+        }
+      }
+
+      document.getElementById("input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") send();
+      });
+
+      document.addEventListener("click", (e) => {
+        const menu = document.getElementById("userMenu");
+        if (!menu.contains(e.target)) menu.style.display = "none";
+      });
+    </script>
+  </body>
+</html>
