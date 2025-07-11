@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
@@ -13,8 +12,8 @@ const PORT = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const rooms = {}; // 방 정보 저장: { roomName: { password, admin, muted, notice } }
-const users = {}; // socket.id → { nickname, room }
+const rooms = {}; // 방 목록: roomName → { password, admin, subadmins: [], muted: [], notice: "" }
+const users = {}; // 유저 목록: socket.id → { nickname, room, role }
 
 app.use(express.static(join(__dirname, "public")));
 
@@ -26,9 +25,15 @@ io.on("connection", (socket) => {
   socket.on("join", ({ room, nickname, isFirst, password }) => {
     if (!rooms[room]) {
       if (isFirst) {
-        rooms[room] = { password, admin: socket.id, muted: [], notice: "" };
-        socket.isAdmin = true;
-        socket.emit("system", "✅ 방 생성 완료 (관리자 권한)");
+        rooms[room] = {
+          password,
+          admin: socket.id,
+          subadmins: [],
+          muted: [],
+          notice: "",
+        };
+        users[socket.id] = { nickname, room, role: "admin" };
+        socket.emit("system", "✅ 방 생성됨 (관리자)");
       } else {
         socket.emit("system", "❌ 방이 존재하지 않습니다.");
         return;
@@ -38,61 +43,78 @@ io.on("connection", (socket) => {
         socket.emit("system", "❌ 이미 존재하는 방입니다.");
         return;
       }
-      socket.isAdmin = false;
+      const isSub = rooms[room].subadmins.includes(socket.id);
+      const role =
+        socket.id === rooms[room].admin ? "admin" : isSub ? "subadmin" : "user";
+      users[socket.id] = { nickname, room, role };
     }
 
     socket.join(room);
     socket.nickname = nickname;
     socket.room = room;
-    users[socket.id] = { nickname, room };
 
     io.to(room).emit("notice", rooms[room].notice);
     updateUserList(room);
   });
 
   socket.on("chat", (msg) => {
-    const { room, nickname } = users[socket.id] || {};
-    if (!room || rooms[room].muted.includes(socket.id)) return;
-    io.to(room).emit("chat", { from: nickname, msg });
+    const user = users[socket.id];
+    if (!user || rooms[user.room].muted.includes(socket.id)) return;
+    io.to(user.room).emit("chat", { from: user.nickname, msg });
   });
 
-  socket.on("notice", (notice) => {
-    const { room } = users[socket.id] || {};
-    if (room && rooms[room].admin === socket.id) {
-      rooms[room].notice = notice;
-      io.to(room).emit("notice", notice);
+  socket.on("notice", (html) => {
+    const user = users[socket.id];
+    if (user && user.role === "admin") {
+      rooms[user.room].notice = html;
+      io.to(user.room).emit("notice", html);
     }
   });
 
   socket.on("mute", (targetId) => {
-    const { room } = users[socket.id] || {};
-    if (room && rooms[room].admin === socket.id) {
-      rooms[room].muted.push(targetId);
+    const user = users[socket.id];
+    if (!user) return;
+    const room = rooms[user.room];
+    if (user.role === "admin" || user.role === "subadmin") {
+      room.muted.push(targetId);
       io.to(targetId).emit("system", "⛔ 채팅 금지되었습니다.");
+    }
+  });
+
+  socket.on("setSubadmin", (targetId) => {
+    const user = users[socket.id];
+    if (!user || user.role !== "admin") return;
+    if (!rooms[user.room].subadmins.includes(targetId)) {
+      rooms[user.room].subadmins.push(targetId);
+      if (users[targetId]) users[targetId].role = "subadmin";
+      updateUserList(user.room);
+      io.to(targetId).emit("system", "🛡️ 부관리자로 지정되었습니다.");
     }
   });
 
   socket.on("whisper", ({ to, msg }) => {
     for (let id in users) {
       if (users[id].nickname === to) {
-        io.to(id).emit("whisper", { from: socket.nickname, msg });
+        io.to(id).emit("whisper", { from: users[socket.id].nickname, msg });
         break;
       }
     }
   });
 
   socket.on("disconnect", () => {
-    const { room } = users[socket.id] || {};
-    if (room) {
+    const user = users[socket.id];
+    if (user) {
       delete users[socket.id];
-      updateUserList(room);
+      updateUserList(user.room);
     }
   });
 
   function updateUserList(room) {
     const list = Object.entries(users)
       .filter(([_, u]) => u.room === room)
-      .map(([id, u]) => ({ id, nickname: u.nickname }));
+      .map(([id, u]) => {
+        return { id, nickname: u.nickname, role: u.role || "user" };
+      });
     io.to(room).emit("users", list);
   }
 });

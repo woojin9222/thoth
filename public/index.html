@@ -1,117 +1,160 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="UTF-8" />
-    <title>uchat clone</title>
-    <style>
-      body {
-        margin: 0;
-        display: flex;
-        height: 100vh;
-        font-family: sans-serif;
+<head>
+  <meta charset="UTF-8" />
+  <title>uchat clone</title>
+  <style>
+    body { margin: 0; display: flex; height: 100vh; font-family: sans-serif; }
+    #chat { flex: 3; display: flex; flex-direction: column; padding: 10px; border-right: 1px solid #ccc; }
+    #users { flex: 1; padding: 10px; background: #f4f4f4; overflow-y: auto; }
+    #messages { flex: 1; overflow-y: scroll; margin: 10px 0; background: #eee; padding: 10px; }
+    .popup-menu {
+      position: absolute;
+      background: white;
+      border: 1px solid #aaa;
+      padding: 5px;
+      z-index: 1000;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .popup-menu button {
+      display: block;
+      width: 100%;
+      border: none;
+      background: none;
+      padding: 4px;
+      cursor: pointer;
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+  <div id="chat">
+    <div id="noticeArea"></div>
+    <div id="messages"></div>
+    <input id="input" placeholder="메시지를 입력하세요..." />
+  </div>
+  <ul id="users"></ul>
+  <div id="popupMenu" class="popup-menu" style="display:none;"></div>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const socket = io();
+    const room = decodeURIComponent(location.pathname.replace("/", "") || "default");
+    const nickname = prompt("닉네임 입력") || "익명";
+    const isFirst = confirm("이 방을 새로 만드시겠습니까?");
+    const password = isFirst ? prompt("비밀번호 설정") : "";
+
+    socket.emit("join", { room, nickname, isFirst, password });
+
+    const messages = document.getElementById("messages");
+    const input = document.getElementById("input");
+    const noticeArea = document.getElementById("noticeArea");
+    const popup = document.getElementById("popupMenu");
+    let myRole = "user";
+
+    socket.on("chat", ({ from, msg }) => {
+      const div = document.createElement("div");
+      div.innerText = from + ": " + msg;
+      messages.appendChild(div);
+    });
+
+    socket.on("whisper", ({ from, msg }) => {
+      const div = document.createElement("div");
+      div.innerText = "(귓속말) " + from + ": " + msg;
+      div.style.color = "gray";
+      messages.appendChild(div);
+    });
+
+    socket.on("notice", (html) => {
+      noticeArea.innerHTML = html;
+    });
+
+    socket.on("system", (msg) => {
+      const div = document.createElement("div");
+      div.innerText = "[알림] " + msg;
+      div.style.color = "red";
+      messages.appendChild(div);
+    });
+
+    socket.on("users", (list) => {
+      const userBox = document.getElementById("users");
+      userBox.innerHTML = "";
+      list.forEach(u => {
+        const li = document.createElement("li");
+        li.innerText = u.nickname;
+        if (u.role === "admin") li.innerText += " 👑";
+        else if (u.role === "subadmin") li.innerText += " 🛡️";
+        if (u.nickname === nickname) myRole = u.role;
+
+        li.style.cursor = "pointer";
+        li.onclick = (e) => {
+          e.stopPropagation();
+          showPopupMenu(e.pageX, e.pageY, u);
+        };
+        userBox.appendChild(li);
+      });
+    });
+
+    document.addEventListener("click", () => {
+      popup.style.display = "none";
+    });
+
+    function showPopupMenu(x, y, user) {
+      popup.innerHTML = "";
+
+      const btnMention = document.createElement("button");
+      btnMention.innerText = "멘션";
+      btnMention.onclick = () => {
+        input.value += `@${user.nickname} `;
+        popup.style.display = "none";
+      };
+      popup.appendChild(btnMention);
+
+      const btnWhisper = document.createElement("button");
+      btnWhisper.innerText = "귓속말";
+      btnWhisper.onclick = () => {
+        const msg = prompt("귓속말 내용:");
+        if (msg) socket.emit("whisper", { to: user.nickname, msg });
+        popup.style.display = "none";
+      };
+      popup.appendChild(btnWhisper);
+
+      if (myRole === "admin" || myRole === "subadmin") {
+        const btnMute = document.createElement("button");
+        btnMute.innerText = "채팅금지";
+        btnMute.onclick = () => {
+          socket.emit("mute", user.id);
+          popup.style.display = "none";
+        };
+        popup.appendChild(btnMute);
       }
-      #chat {
-        flex: 3;
-        display: flex;
-        flex-direction: column;
-        padding: 10px;
-        border-right: 1px solid #ccc;
+
+      if (myRole === "admin") {
+        const btnSub = document.createElement("button");
+        btnSub.innerText = "부관리자 지정";
+        btnSub.onclick = () => {
+          socket.emit("setSubadmin", user.id);
+          popup.style.display = "none";
+        };
+        popup.appendChild(btnSub);
       }
-      #users {
-        flex: 1;
-        padding: 10px;
-        background: #f4f4f4;
-        overflow-y: auto;
-      }
-      #messages {
-        flex: 1;
-        overflow-y: scroll;
-        margin: 10px 0;
-        background: #eee;
-        padding: 10px;
-      }
-    </style>
-  </head>
-  <body>
-    <div id="chat">
-      <div id="noticeArea"></div>
-      <div id="messages"></div>
-      <input id="input" placeholder="메시지를 입력하세요..." />
-    </div>
-    <ul id="users"></ul>
 
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    <script>
-      const socket = io();
-      const room = decodeURIComponent(
-        location.pathname.replace("/", "") || "default",
-      );
-      const nickname = prompt("닉네임 입력") || "익명";
-      const isFirst = confirm("이 방을 새로 만드시겠습니까?");
-      const password = isFirst ? prompt("비밀번호 설정") : "";
+      popup.style.left = x + "px";
+      popup.style.top = y + "px";
+      popup.style.display = "block";
+    }
 
-      socket.emit("join", { room, nickname, isFirst, password });
-
-      const messages = document.getElementById("messages");
-      const input = document.getElementById("input");
-      const noticeArea = document.getElementById("noticeArea");
-
-      socket.on("chat", ({ from, msg }) => {
-        const div = document.createElement("div");
-        div.innerText = from + ": " + msg;
-        messages.appendChild(div);
-      });
-
-      socket.on("whisper", ({ from, msg }) => {
-        const div = document.createElement("div");
-        div.innerText = "(귓속말) " + from + ": " + msg;
-        div.style.color = "gray";
-        messages.appendChild(div);
-      });
-
-      socket.on("notice", (html) => {
-        noticeArea.innerHTML = html;
-      });
-
-      socket.on("system", (msg) => {
-        const div = document.createElement("div");
-        div.innerText = "[알림] " + msg;
-        div.style.color = "red";
-        messages.appendChild(div);
-      });
-
-      socket.on("users", (list) => {
-        const userBox = document.getElementById("users");
-        userBox.innerHTML = "";
-        list.forEach((u) => {
-          const li = document.createElement("li");
-          li.innerText = u.nickname;
-          li.onclick = () => {
-            const choice = prompt("1: 멘션, 2: 귓속말, 3: 금지");
-            if (choice === "1") input.value += "@" + u.nickname + " ";
-            if (choice === "2") {
-              const msg = prompt("귓속말:");
-              socket.emit("whisper", { to: u.nickname, msg });
-            }
-            if (choice === "3") {
-              socket.emit("mute", u.id);
-            }
-          };
-          userBox.appendChild(li);
-        });
-      });
-
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          const text = input.value.trim();
-          if (text.startsWith("/공지")) {
-            socket.emit("notice", text.slice(4).trim());
-          } else {
-            socket.emit("chat", text);
-          }
-          input.value = "";
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const text = input.value.trim();
+        if (text.startsWith("/공지")) {
+          socket.emit("notice", text.slice(4).trim());
+        } else {
+          socket.emit("chat", text);
         }
-      });
-    </script>
-  </body>
+        input.value = "";
+      }
+    });
+  </script>
+</body>
 </html>
